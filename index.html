@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instant Stable Chat</title>
+    <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f2f5; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #chat-box { height: 250px; border: 1px solid #ccc; overflow-y: auto; padding: 10px; margin: 10px 0; background: #fafafa; border-radius: 4px; }
+        .msg { margin-bottom: 8px; padding: 6px 10px; border-radius: 4px; background: #e2f0cb; width: fit-content; }
+        .system { background: #eee; font-style: italic; color: #555; }
+        .hidden { display: none; }
+        input, button { padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        .flex { display: flex; gap: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Instant Room Chat</h2>
+    
+    <div id="setup-area">
+        <p>Pick a unique secret room name and give it to your friend:</p>
+        <input type="text" id="room-input" placeholder="e.g., fast-chat-99" style="width:100%">
+        <input type="text" id="name-input" placeholder="Your Name" style="width:100%; margin-top: 5px;">
+        <button onclick="connectToRoom()" style="width: 100%; margin-top: 10px;">Join Chat Room</button>
+    </div>
+
+    <div id="chat-area" class="hidden">
+        <div id="chat-box"><div class="msg system">Connecting to server...</div></div>
+        <div class="flex">
+            <input type="text" id="msg-input" placeholder="Type a message..." style="flex: 1;" onkeypress="if(event.key==='Enter') sendMsg()">
+            <button onclick="sendMsg()">Send</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let client;
+    let currentTopic;
+    let myName = "Anonymous";
+
+    function connectToRoom() {
+        const roomInput = document.getElementById('room-input').value.trim().toLowerCase();
+        const nameInput = document.getElementById('name-input').value.trim();
+        
+        if (!roomInput) return alert("Please type a room name!");
+        if (nameInput) myName = nameInput;
+
+        currentTopic = "instant_gh_pages_chat/" + roomInput;
+
+        document.getElementById('setup-area').classList.add('hidden');
+        document.getElementById('chat-area').classList.remove('hidden');
+
+        // Connected to an alternative public broker infrastructure via WebSockets
+        client = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+
+        client.on('connect', () => {
+            document.getElementById('chat-box').innerHTML = ""; // Clear status
+            logMessage("System", `Successfully entered: "${roomInput}". Chat away!`, true);
+            client.subscribe(currentTopic);
+        });
+
+        client.on('message', (topic, message) => {
+            try {
+                const data = JSON.parse(message.toString());
+                if (data.sender !== myName) {
+                    logMessage(data.sender, data.text);
+                }
+            } catch (e) {
+                // Support plain text if fallback happens
+                logMessage("Someone", message.toString());
+            }
+        });
+
+        client.on('error', (err) => {
+            logMessage("System", "Server busy. Retrying automatically...", true);
+        });
+    }
+
+    function sendMsg() {
+        const input = document.getElementById('msg-input');
+        const text = input.value.trim();
+        if (!text || !client) return;
+
+        const payload = {
+            sender: myName,
+            text: text
+        };
+
+        client.publish(currentTopic, JSON.stringify(payload));
+        logMessage("Me", text);
+        input.value = "";
+    }
+
+    function logMessage(sender, text, isSystem = false) {
+        const box = document.getElementById('chat-box');
+        const div = document.createElement('div');
+        div.className = `msg ${isSystem ? 'system' : ''}`;
+        div.innerHTML = `<strong>${sender}:</strong> ${text}`;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+    }
+</script>
+</body>
+</html>
