@@ -7,30 +7,153 @@
     <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f0f2f5; }
-        .container { max-width: 500px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        #chat-box { height: 250px; border: 1px solid #ccc; overflow-y: auto; padding: 10px; margin: 10px 0; background: #fafafa; border-radius: 4px; }
-        .msg { margin-bottom: 8px; padding: 6px 10px; border-radius: 4px; background: #e2f0cb; width: fit-content; }
-        .system { background: #eee; font-style: italic; color: #555; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: relative; }
+        #chat-box { height: 300px; border: 1px solid #ccc; overflow-y: auto; padding: 10px; margin: 10px 0; background: #fafafa; border-radius: 4px; display: flex; flex-direction: column; gap: 8px; }
+        
+        /* Message Bubbles */
+        .msg { padding: 8px 12px; border-radius: 12px; width: fit-content; max-width: 80%; word-break: break-word; font-size: 0.95rem; display: flex; flex-direction: column; }
+        .msg.other { background: #e2f0cb; align-self: flex-start; border-bottom-left-radius: 2px; color: #333; }
+        .msg.me { background: #007bff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .msg.system { background: #eee; font-style: italic; color: #555; align-self: center; border-radius: 4px; font-size: 0.85rem; text-align: center; max-width: 90%; }
+        
+        .meta { font-size: 0.75rem; opacity: 0.7; margin-top: 4px; display: flex; justify-content: space-between; gap: 10px; }
+        .me .meta { color: #e0e0e0; }
+        
         .hidden { display: none; }
         input, button { padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         button { background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; }
         button:hover { background: #0056b3; }
         .flex { display: flex; gap: 10px; }
+        
+        .nav-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; position: relative; }
+        .logout-btn { background: #dc3545; padding: 5px 10px; font-size: 0.85rem; }
+        .logout-btn:hover { background: #c82333; }
+        .delete-btn { background: #dc3545; font-size: 0.8rem; padding: 4px 8px; margin: 0; }
+        .secondary-btn { background: #6c757d; font-size: 0.8rem; padding: 4px 8px; margin: 0; }
+        .secondary-btn:hover { background: #5a6268; }
+        
+        .bell-btn { background: none; color: #333; font-size: 1.4rem; padding: 5px; margin: 0; border: none; position: relative; cursor: pointer; }
+        .bell-btn:hover { color: #007bff; background: none; }
+        .badge { position: absolute; top: -2px; right: -2px; background: red; color: white; font-size: 0.7rem; font-weight: bold; padding: 2px 6px; border-radius: 50%; display: none; }
+        
+        .inbox-dropdown { position: absolute; top: 40px; right: 0; width: 280px; background: white; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 100; padding: 10px; display: none; max-height: 200px; overflow-y: auto; }
+        .inbox-item { padding: 8px; border-bottom: 1px solid #eee; font-size: 0.85rem; color: #333; position: relative; }
+        
+        .code-box { background: #eef; padding: 10px; border-radius: 4px; font-family: monospace; font-weight: bold; font-size: 1.1rem; text-align: center; margin: 10px 0; border: 1px dashed #007bff; }
+        .room-item { padding: 10px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
+        .room-clickable { cursor: pointer; flex: 1; display: flex; justify-content: space-between; align-items: center; }
+        .room-item:hover .room-clickable { color: #007bff; }
+        .tab-btn { background: #6c757d; flex: 1; }
+        .tab-btn.active { background: #007bff; }
+        
+        .invite-section { background: #fdfdfd; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px; margin-bottom: 10px; font-size: 0.9rem; }
+        .chat-options-bar { display: flex; gap: 5px; justify-content: flex-end; margin-bottom: 5px; }
+        select { padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 100%; margin: 5px 0; }
+        
+        .report-card { background: #fff5f5; border: 1px solid #feb2b2; padding: 8px; border-radius: 4px; margin-bottom: 5px; font-size: 0.85rem; }
+        .search-bar { width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Instant Room Chat</h2>
     
-    <div id="setup-area">
-        <p>Pick a unique secret room name and give it to your friend:</p>
-        <input type="text" id="room-input" placeholder="e.g., fast-chat-99" style="width:100%">
-        <input type="text" id="name-input" placeholder="Your Name" style="width:100%; margin-top: 5px;">
-        <button onclick="connectToRoom()" style="width: 100%; margin-top: 10px;">Join Chat Room</button>
+    <div id="auth-area">
+        <h2 id="auth-title">Login</h2>
+        <div class="flex" style="margin-bottom: 10px;">
+            <button class="tab-btn active" id="tab-login" onclick="switchAuthTab('login')">Existing User</button>
+            <button class="tab-btn" id="tab-register" onclick="switchAuthTab('register')">Create Account</button>
+        </div>
+        <input type="text" id="username-input" placeholder="Username" style="width:100%">
+        <input type="password" id="password-input" placeholder="Password" style="width:100%">
+        <button id="auth-submit-btn" onclick="handleAuth()" style="width: 100%; margin-top: 10px;">Login</button>
+    </div>
+
+    <div id="setup-area" class="hidden">
+        <div class="nav-header">
+            <span>Hi, <strong id="user-display-name"></strong>!</span>
+            
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <button class="bell-btn" onclick="toggleInboxTray()">
+                    🔔<span class="badge" id="noti-badge">0</span>
+                </button>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+                
+                <div class="inbox-dropdown" id="inbox-tray">
+                    <div style="display: flex; justify-content: space-between; font-weight: bold; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-bottom: 5px;">
+                        <span>Inbox Notifications</span>
+                        <a href="#" style="font-size:0.75rem; color:#dc3545; text-decoration:none;" onclick="clearAllNotifications(event)">Clear All</a>
+                    </div>
+                    <div id="inbox-items-list">No new alerts.</div>
+                </div>
+            </div>
+        </div>
+        
+        <p>Your Private Chat Code (Share this with 1 friend):</p>
+        <div class="code-box" id="my-identity-code">-----</div>
+
+        <h3>Link a Friend's Code</h3>
+        <div class="flex">
+            <input type="text" id="friend-code-input" placeholder="Enter friend's Chat Code" style="flex: 1;">
+            <button onclick="addNewFriendByCode()">Connect</button>
+        </div>
+
+        <h3>Join/Create Named Room</h3>
+        <div class="flex">
+            <input type="text" id="room-input" placeholder="e.g., gaming-lounge" style="flex: 1;">
+            <button onclick="joinCustomNamedRoom()">Join Room</button>
+        </div>
+
+        <h3>Your Stored Rooms & Chats</h3>
+        <div id="rooms-list-container"></div>
+    </div>
+
+    <div id="admin-area" class="hidden">
+        <div class="nav-header">
+            <span>🛡️ <strong>Admin Control Panel</strong></span>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+        
+        <h3>Admin Tools: Join Named Chat Room</h3>
+        <div class="flex">
+            <input type="text" id="admin-room-input" placeholder="Enter Room Name..." style="flex: 1;">
+            <button onclick="adminJoinRoom()" style="background: #28a745;">Open Room →</button>
+        </div>
+        
+        <h3>⚠️ Received User Reports</h3>
+        <div id="admin-reports-list" style="margin-bottom: 20px;"></div>
+        
+        <h3>Registered Local Accounts</h3>
+        <input type="text" id="admin-user-search" class="search-bar" placeholder="🔍 Search registered users by name..." oninput="filterAdminUsers()">
+        <div id="admin-users-list" style="margin-bottom: 20px;"></div>
+        
+        <h3>Active Chat Records</h3>
+        <div id="admin-rooms-list"></div>
     </div>
 
     <div id="chat-area" class="hidden">
+        <div class="nav-header">
+            <span id="active-room-title">Chatting</span>
+            <button class="logout-btn" style="background:#6c757d" onclick="leaveRoom()">Back</button>
+        </div>
+
+        <div class="chat-options-bar">
+            <button class="secondary-btn" style="background: #ffc107; color: black;" onclick="triggerUserReport()">⚠️ Report User</button>
+            <button class="delete-btn" onclick="triggerDeleteHistory()">🗑️ Wipe Chat History</button>
+        </div>
+
+        <div class="invite-section" id="room-invite-panel">
+            <strong>🤝 Invite Someone to This Room:</strong>
+            <div class="flex" style="margin-top: 5px;">
+                <input type="text" id="invite-code-raw" placeholder="Paste friend's Code" style="flex:1; padding:5px;">
+                <button onclick="sendRoomInvite('raw')" style="padding:5px 10px; background:#28a745; font-size:0.85rem;">Invite Code</button>
+            </div>
+            <div style="margin-top: 5px;">
+                <select id="invite-history-select"><option value="">-- Choose past companion --</option></select>
+                <button onclick="sendRoomInvite('history')" style="width:100%; padding:5px; background:#17a2b8; font-size:0.85rem; margin-top:3px;">Invite Past Companion</button>
+            </div>
+        </div>
+
         <div id="chat-box"><div class="msg system">Connecting to server...</div></div>
         <div class="flex">
             <input type="text" id="msg-input" placeholder="Type a message..." style="flex: 1;" onkeypress="if(event.key==='Enter') sendMsg()">
@@ -40,70 +163,540 @@
 </div>
 
 <script>
-    let client;
+    let globalClient; 
     let currentTopic;
-    let myName = "Anonymous";
+    let currentUser = null;
+    let myUserCode = "ADMIN-ONLY";
+    let authMode = "login"; 
+    let currentRoomId = "";
+    let inActiveChat = false;
+    let isAdmin = false;
+    let activeNotifications = [];
 
-    function connectToRoom() {
-        const roomInput = document.getElementById('room-input').value.trim().toLowerCase();
-        const nameInput = document.getElementById('name-input').value.trim();
+    function switchAuthTab(mode) {
+        authMode = mode;
+        document.getElementById('auth-title').textContent = mode === 'login' ? 'Login' : 'Create Account';
+        document.getElementById('auth-submit-btn').textContent = mode === 'login' ? 'Login' : 'Register Account';
+        document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+        document.getElementById('tab-register').classList.toggle('active', mode === 'register');
+    }
+
+    function handleAuth() {
+        const username = document.getElementById('username-input').value.trim();
+        const password = document.getElementById('password-input').value.trim();
+
+        if (!username || !password) return alert("Please enter both fields!");
+
+        if (username === "konstas0002" && password === "loveyoulove") {
+            isAdmin = true;
+            currentUser = username;
+            myUserCode = "ADMIN-ONLY";
+            document.getElementById('auth-area').classList.add('hidden');
+            document.getElementById('admin-area').classList.remove('hidden');
+            initGlobalBackgroundSync();
+            renderAdminDashboard();
+            return;
+        }
+
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+
+        if (authMode === 'register') {
+            if (users[username] || username === "konstas0002") return alert("Username already taken!");
+            const generatedCode = "CC-" + Math.floor(100000 + Math.random() * 900000);
+            
+            users[username] = { password: password, code: generatedCode, myChats: [] };
+            localStorage.setItem('chat_v3_users', JSON.stringify(users));
+            alert(`Account created! Your code is: ${generatedCode}`);
+        } else {
+            if (!users[username] || users[username].password !== password) {
+                return alert("Invalid username or password!");
+            }
+        }
+
+        isAdmin = false;
+        currentUser = username;
+        myUserCode = users[username].code;
         
-        if (!roomInput) return alert("Please type a room name!");
-        if (nameInput) myName = nameInput;
+        document.getElementById('user-display-name').textContent = currentUser;
+        document.getElementById('my-identity-code').textContent = myUserCode;
+        
+        document.getElementById('auth-area').classList.add('hidden');
+        document.getElementById('setup-area').classList.remove('hidden');
+        
+        initGlobalBackgroundSync();
+        renderActiveRoomsList();
+    }
 
-        currentTopic = "instant_gh_pages_chat/" + roomInput;
+    function toggleInboxTray() {
+        const tray = document.getElementById('inbox-tray');
+        const visible = tray.style.display === "block";
+        tray.style.display = visible ? "none" : "block";
+    }
 
-        document.getElementById('setup-area').classList.add('hidden');
-        document.getElementById('chat-area').classList.remove('hidden');
+    function pushNotification(msgText, roomId) {
+        activeNotifications.push({ text: msgText, roomId: roomId });
+        updateInboxDOM();
+    }
 
-        // Connected to an alternative public broker infrastructure via WebSockets
-        client = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+    function updateInboxDOM() {
+        const list = document.getElementById('inbox-items-list');
+        const badge = document.getElementById('noti-badge');
+        
+        if (activeNotifications.length === 0) {
+            list.innerHTML = `<div style="color: #666; font-style: italic; font-size: 0.85rem;">No new alerts.</div>`;
+            badge.style.display = "none";
+            return;
+        }
 
-        client.on('connect', () => {
-            document.getElementById('chat-box').innerHTML = ""; // Clear status
-            logMessage("System", `Successfully entered: "${roomInput}". Chat away!`, true);
-            client.subscribe(currentTopic);
+        badge.textContent = activeNotifications.length;
+        badge.style.display = "block";
+        list.innerHTML = "";
+
+        activeNotifications.forEach((noti) => {
+            const item = document.createElement('div');
+            item.className = "inbox-item";
+            item.innerHTML = noti.text;
+            list.appendChild(item);
         });
+    }
 
-        client.on('message', (topic, message) => {
-            try {
-                const data = JSON.parse(message.toString());
-                if (data.sender !== myName) {
-                    logMessage(data.sender, data.text);
-                }
-            } catch (e) {
-                // Support plain text if fallback happens
-                logMessage("Someone", message.toString());
+    function clearAllNotifications(e) {
+        if(e) e.preventDefault();
+        activeNotifications = [];
+        updateInboxDOM();
+    }
+
+    function removeNotificationByRoom(roomId) {
+        if (!roomId) return;
+        activeNotifications = activeNotifications.filter(noti => noti.roomId !== roomId);
+        updateInboxDOM();
+    }
+
+    function initGlobalBackgroundSync() {
+        globalClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+
+        globalClient.on('connect', () => {
+            globalClient.subscribe("instant_gh_pages_chat/alerts/" + myUserCode);
+            if(!isAdmin) {
+                let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+                const rooms = users[currentUser].myChats || [];
+                rooms.forEach(roomId => {
+                    globalClient.subscribe("instant_gh_pages_chat/p2p_secure/" + roomId);
+                });
+            } else {
+                // Admin checks standard global rooms
+                globalClient.subscribe("instant_gh_pages_chat/p2p_secure/+/+");
             }
         });
 
-        client.on('error', (err) => {
-            logMessage("System", "Server busy. Retrying automatically...", true);
+        globalClient.on('message', (topic, message) => {
+            try {
+                const data = JSON.parse(message.toString());
+                if (data.sender === currentUser) return;
+
+                if (topic.includes("alerts/")) {
+                    if (data.type === "room_invite") {
+                        pushNotification(`📩 <b>${data.senderName}</b> invited you to: <button onclick="acceptRoomInvite('${data.roomId}','${data.roomName}')">Join Room</button>`, data.roomId);
+                    } else {
+                        pushNotification(`📢 User <b>${data.senderName}</b> (${data.senderCode}) linked your code!`, data.roomContextId);
+                        addRoomToUserContext(data.roomContextId);
+                    }
+                    return;
+                }
+
+                if (!inActiveChat || currentRoomId !== data.roomId) {
+                    pushNotification(`✉️ <b>${data.sender}</b>: "${data.text.substring(0,20)}" in ${data.roomName}`, data.roomId);
+                } 
+                
+                if (currentRoomId === data.roomId && inActiveChat) {
+                    logMessage(data.sender, data.text, "other");
+                }
+                if(!isAdmin) saveMessageToHistory(data.roomId, data.sender, data.text, "other");
+
+            } catch (e) {}
         });
+    }
+
+    function triggerDeleteHistory() {
+        if (!confirm("Wipe all message logs for this chat?")) return;
+        localStorage.removeItem(`h3_${currentUser}_${currentRoomId}`);
+        document.getElementById('chat-box').innerHTML = '<div class="msg system">History wiped locally.</div>';
+    }
+
+    function triggerUserReport() {
+        const target = prompt("Enter the username to report:");
+        if (!target) return;
+        const reason = prompt("Enter reason for report:");
+        if (!reason) return;
+
+        let reports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
+        reports.push({
+            reporter: currentUser,
+            reportedUser: target,
+            reason: reason,
+            room: currentRoomId,
+            timestamp: new Date().toLocaleString()
+        });
+        localStorage.setItem('chat_v3_reports', JSON.stringify(reports));
+        alert("Report filed successfully.");
+    }
+
+    function userLeaveChat(roomId) {
+        if (!confirm("Remove this conversation? It will stop taking up space on your device.")) return;
+        
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+        if (users[currentUser] && users[currentUser].myChats) {
+            users[currentUser].myChats = users[currentUser].myChats.filter(id => id !== roomId);
+            localStorage.setItem('chat_v3_users', JSON.stringify(users));
+        }
+        
+        localStorage.removeItem(`h3_${currentUser}_${roomId}`);
+        removeNotificationByRoom(roomId);
+        renderActiveRoomsList();
+    }
+
+    function sendRoomInvite(source) {
+        let targetCode = "";
+        if(source === 'raw') {
+            targetCode = document.getElementById('invite-code-raw').value.trim();
+        } else {
+            targetCode = document.getElementById('invite-history-select').value;
+        }
+
+        if(!targetCode || targetCode === myUserCode) return alert("Select a valid companion code!");
+
+        const cleanLabel = document.getElementById('active-room-title').textContent;
+        const invitePayload = {
+            type: "room_invite",
+            senderName: currentUser,
+            senderCode: myUserCode,
+            roomId: currentRoomId,
+            roomName: cleanLabel
+        };
+
+        globalClient.publish("instant_gh_pages_chat/alerts/" + targetCode, JSON.stringify(invitePayload));
+        alert("Invitation sent!");
+        document.getElementById('invite-code-raw').value = "";
+    }
+
+    function acceptRoomInvite(roomId, label) {
+        addRoomToUserContext(roomId);
+        openChatRoom(roomId, label);
+        const tray = document.getElementById('inbox-tray');
+        tray.style.display = "none";
+    }
+
+    function addNewFriendByCode() {
+        const targetCode = document.getElementById('friend-code-input').value.trim();
+        if (!targetCode || targetCode === myUserCode) return alert("Invalid code entry!");
+
+        const codesArray = [myUserCode, targetCode].sort();
+        const combinedSecretRoomId = `code_${codesArray[0]}_${codesArray[1]}`;
+
+        addRoomToUserContext(combinedSecretRoomId);
+
+        const systemPayload = { senderCode: myUserCode, senderName: currentUser, roomContextId: combinedSecretRoomId };
+        globalClient.publish("instant_gh_pages_chat/alerts/" + targetCode, JSON.stringify(systemPayload));
+
+        document.getElementById('friend-code-input').value = "";
+        openChatRoom(combinedSecretRoomId, `Private Code Link`);
+    }
+
+    function joinCustomNamedRoom() {
+        const roomName = document.getElementById('room-input').value.trim().toLowerCase();
+        if (!roomName) return alert("Enter a room name!");
+
+        const standardRoomId = `named_${roomName}`;
+        addRoomToUserContext(standardRoomId);
+        
+        document.getElementById('room-input').value = "";
+        openChatRoom(standardRoomId, `Room: ${roomName}`);
+    }
+
+    function addRoomToUserContext(roomId) {
+        if(isAdmin) return;
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+        if (!users[currentUser].myChats.includes(roomId)) {
+            users[currentUser].myChats.push(roomId);
+            localStorage.setItem('chat_v3_users', JSON.stringify(users));
+            if(globalClient) globalClient.subscribe("instant_gh_pages_chat/p2p_secure/" + roomId);
+            renderActiveRoomsList();
+        }
+    }
+
+    function renderActiveRoomsList() {
+        const container = document.getElementById('rooms-list-container');
+        container.innerHTML = "";
+
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+        const activeRooms = users[currentUser].myChats || [];
+
+        if(activeRooms.length === 0) {
+            container.innerHTML = `<p style="color:#888; font-style:italic;">No active rooms found.</p>`;
+            return;
+        }
+
+        activeRooms.forEach(roomId => {
+            const div = document.createElement('div');
+            div.className = "room-item";
+            
+            let cleanDisplay = "";
+            if (roomId.startsWith("code_")) {
+                const parts = roomId.replace("code_", "").split("_");
+                const companionCode = parts[0] === myUserCode ? parts[1] : parts[0];
+                let companionName = "Unknown Friend";
+                Object.keys(users).forEach(u => {
+                    if(users[u].code === companionCode) companionName = u;
+                });
+                cleanDisplay = `🔒 Chat with: <b>${companionName}</b> (${companionCode})`;
+            } else {
+                cleanDisplay = `💬 Public Room: ${roomId.replace("named_", "")}`;
+            }
+            
+            div.innerHTML = `
+                <div class="room-clickable"><span>${cleanDisplay}</span></div>
+                <button class="delete-btn" style="padding: 4px 8px; font-size: 0.75rem;" onclick="userLeaveChat('${roomId}')">🗑️ Leave</button>
+            `;
+            div.querySelector('.room-clickable').onclick = () => openChatRoom(roomId, roomId.startsWith("code_") ? "Private Chat" : roomId.replace("named_", ""));
+            container.appendChild(div);
+        });
+    }
+
+    function openChatRoom(roomId, displayLabel) {
+        currentRoomId = roomId;
+        currentTopic = "instant_gh_pages_chat/p2p_secure/" + currentRoomId;
+        inActiveChat = true;
+
+        removeNotificationByRoom(roomId);
+
+        document.getElementById('active-room-title').textContent = displayLabel;
+        document.getElementById('setup-area').classList.add('hidden');
+        document.getElementById('admin-area').classList.add('hidden');
+        document.getElementById('chat-area').classList.remove('hidden');
+
+        if (roomId.startsWith("code_") || isAdmin) {
+            document.getElementById('room-invite-panel').classList.add('hidden');
+        } else {
+            document.getElementById('room-invite-panel').classList.remove('hidden');
+        }
+
+        const box = document.getElementById('chat-box');
+        box.innerHTML = "";
+        
+        if(!isAdmin) {
+            loadChatHistory(roomId);
+            const select = document.getElementById('invite-history-select');
+            select.innerHTML = '<option value="">-- Choose past companion --</option>';
+            let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+            Object.keys(users).forEach(uName => {
+                if(uName !== currentUser) {
+                    const opt = document.createElement('option');
+                    opt.value = users[uName].code;
+                    opt.textContent = `${uName} (${users[uName].code})`;
+                    select.appendChild(opt);
+                }
+            });
+        } else {
+            globalClient.subscribe(currentTopic);
+            logMessage("System", `Admin view opened inside channel room.`, "system");
+        }
+    }
+
+    function leaveRoom() {
+        inActiveChat = false;
+        document.getElementById('chat-area').classList.add('hidden');
+        if (isAdmin) {
+            document.getElementById('admin-area').classList.remove('hidden');
+            renderAdminDashboard();
+        } else {
+            document.getElementById('setup-area').classList.remove('hidden');
+            renderActiveRoomsList();
+        }
     }
 
     function sendMsg() {
         const input = document.getElementById('msg-input');
         const text = input.value.trim();
-        if (!text || !client) return;
+        if (!text) return;
 
+        const label = document.getElementById('active-room-title').textContent;
         const payload = {
-            sender: myName,
-            text: text
+            sender: currentUser,
+            text: text,
+            roomId: currentRoomId,
+            roomName: label
         };
 
-        client.publish(currentTopic, JSON.stringify(payload));
-        logMessage("Me", text);
+        globalClient.publish(currentTopic, JSON.stringify(payload));
+        logMessage("Me", text, "me");
+        if(!isAdmin) saveMessageToHistory(currentRoomId, "Me", text, "me");
         input.value = "";
     }
 
-    function logMessage(sender, text, isSystem = false) {
+    function saveMessageToHistory(rId, sender, text, type) {
+        const key = `h3_${currentUser}_${rId}`;
+        let history = JSON.parse(localStorage.getItem(key)) || [];
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (history.length > 0 && history[history.length-1].text === text && history[history.length-1].sender === sender) return;
+        history.push({ sender, text, type, time });
+        localStorage.setItem(key, JSON.stringify(history));
+    }
+
+    function loadChatHistory(rId) {
+        const key = `h3_${currentUser}_${rId}`;
+        let history = JSON.parse(localStorage.getItem(key)) || [];
+        history.forEach(msg => {
+            renderMessageDOM(msg.sender, msg.text, msg.type, msg.time);
+        });
+    }
+
+    function logMessage(sender, text, type) {
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        renderMessageDOM(sender, text, type, time);
+    }
+
+    function renderMessageDOM(sender, text, type, time) {
         const box = document.getElementById('chat-box');
         const div = document.createElement('div');
-        div.className = `msg ${isSystem ? 'system' : ''}`;
-        div.innerHTML = `<strong>${sender}:</strong> ${text}`;
+        div.className = `msg ${type}`;
+
+        if (type === "system") {
+            div.textContent = text;
+        } else {
+            const userSpan = document.createElement('strong');
+            userSpan.textContent = sender + ": ";
+            const textSpan = document.createElement('span');
+            textSpan.textContent = text;
+            const metaSpan = document.createElement('span');
+            metaSpan.className = 'meta';
+            metaSpan.textContent = time;
+
+            div.appendChild(userSpan);
+            div.appendChild(textSpan);
+            div.appendChild(metaSpan);
+        }
         box.appendChild(div);
         box.scrollTop = box.scrollHeight;
+    }
+
+    // --- UPDATED ROOMS ONLY ENGINE FOR ADMIN ---
+    function adminJoinRoom() {
+        let inputTarget = document.getElementById('admin-room-input').value.trim();
+        if(!inputTarget) return alert("Specify room name!");
+        
+        // Strict room path filter parsing logic
+        if(!inputTarget.startsWith("code_") && !inputTarget.startsWith("named_")) {
+            inputTarget = "named_" + inputTarget.toLowerCase();
+        }
+        
+        openChatRoom(inputTarget, `Room: ${inputTarget.replace("named_", "")}`);
+        document.getElementById('admin-room-input').value = "";
+    }
+
+    function filterAdminUsers() {
+        const query = document.getElementById('admin-user-search').value.toLowerCase();
+        const items = document.querySelectorAll('#admin-users-list .room-item');
+        
+        items.forEach(item => {
+            const text = item.textContent.toLowerCase();
+            item.style.display = text.includes(query) ? "flex" : "none";
+        });
+    }
+
+    function renderAdminDashboard() {
+        const usersListContainer = document.getElementById('admin-users-list');
+        const roomsListContainer = document.getElementById('admin-rooms-list');
+        const reportsListContainer = document.getElementById('admin-reports-list');
+        
+        usersListContainer.innerHTML = "";
+        roomsListContainer.innerHTML = "";
+        reportsListContainer.innerHTML = "";
+        
+        let reports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
+        if(reports.length === 0) {
+            reportsListContainer.innerHTML = "<p style='color:green; font-style:italic;'>No reports submitted.</p>";
+        } else {
+            reports.forEach((rep, index) => {
+                const rCard = document.createElement('div');
+                rCard.className = "report-card";
+                rCard.innerHTML = `⚠️ <b>[${rep.timestamp}]</b> User <b>${rep.reporter}</b> reported <b>${rep.reportedUser}</b><br>
+                                   Context Room: <i>${rep.room}</i><br>
+                                   <b>Reason:</b> "${rep.reason}"<br>
+                                   <button class="secondary-btn" onclick="dismissReport(${index})">Dismiss Report</button>`;
+                reportsListContainer.appendChild(rCard);
+            });
+        }
+
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+        Object.keys(users).forEach(user => {
+            const item = document.createElement('div');
+            item.className = "room-item";
+            item.innerHTML = `<span>👤 User: <strong>${user}</strong> (Code: <code>${users[user].code}</code>)</span>
+                              <button class="delete-btn" onclick="adminDeleteUser('${user}')">Ban / Delete</button>`;
+            usersListContainer.appendChild(item);
+        });
+
+        let foundRooms = new Set();
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key.startsWith("h3_")) {
+                const parts = key.split("_");
+                if (parts.length >= 3) foundRooms.add(parts.slice(2).join("_"));
+            }
+        }
+        foundRooms.forEach(roomId => {
+            const item = document.createElement('div');
+            item.className = "room-item";
+            const label = roomId.startsWith("code_") ? `🔒 Private Link: ${roomId}` : `💬 Public Room: ${roomId.replace("named_", "")}`;
+            item.innerHTML = `<div class="room-clickable"><span>${label}</span> <strong>Chat Here →</strong></div>
+                              <button class="delete-btn" onclick="adminDeleteRoom('${roomId}')">Wipe Room</button>`;
+            item.querySelector('.room-clickable').onclick = () => openChatRoom(roomId, `Admin Room View`);
+            roomsListContainer.appendChild(item);
+        });
+    }
+
+    function dismissReport(index) {
+        let reports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
+        reports.splice(index, 1);
+        localStorage.setItem('chat_v3_reports', JSON.stringify(reports));
+        renderAdminDashboard();
+    }
+
+    function adminDeleteUser(targetUser) {
+        if (!confirm(`Delete user "${targetUser}"?`)) return;
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+        delete users[targetUser];
+        localStorage.setItem('chat_v3_users', JSON.stringify(users));
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+            if (localStorage.key(i).startsWith(`h3_${targetUser}_`)) localStorage.removeItem(localStorage.key(i));
+        }
+        renderAdminDashboard();
+    }
+
+    function adminDeleteRoom(roomId) {
+        if (!confirm(`Wipe room "${roomId}"?`)) return;
+        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+        Object.keys(users).forEach(username => {
+            if (users[username].myChats) users[username].myChats = users[username].myChats.filter(id => id !== roomId);
+        });
+        localStorage.setItem('chat_v3_users', JSON.stringify(users));
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+            if (localStorage.key(i).endsWith(`_${roomId}`)) localStorage.removeItem(localStorage.key(i));
+        }
+        renderAdminDashboard();
+    }
+
+    function logout() {
+        if(globalClient) globalClient.end();
+        currentUser = null;
+        isAdmin = false;
+        activeNotifications = [];
+        updateInboxDOM();
+        document.getElementById('inbox-tray').style.display = "none";
+        document.getElementById('setup-area').classList.add('hidden');
+        document.getElementById('admin-area').classList.add('hidden');
+        document.getElementById('chat-area').classList.add('hidden');
+        document.getElementById('auth-area').classList.remove('hidden');
     }
 </script>
 </body>
