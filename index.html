@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instant Stable Chat</title>
+    <title>Instant Global Chat</title>
     <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f0f2f5; }
@@ -173,6 +173,97 @@
     let isAdmin = false;
     let activeNotifications = [];
 
+    // Auto-connect MQTT early to handle background database synchronization
+    function initMQTTConnection() {
+        globalClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+
+        globalClient.on('connect', () => {
+            // Global topics for system synchronization across different devices
+            globalClient.subscribe("instant_gh_pages_chat/global_sync/users");
+            globalClient.subscribe("instant_gh_pages_chat/global_sync/reports");
+            globalClient.subscribe("instant_gh_pages_chat/global_sync/requests");
+
+            // Broadcast request to get user tables from other online devices upon loading up
+            globalClient.publish("instant_gh_pages_chat/global_sync/requests", JSON.stringify({ type: "REQ_DATABASE" }));
+        });
+
+        globalClient.on('message', (topic, message) => {
+            try {
+                const data = JSON.parse(message.toString());
+
+                // 1. Sync registered users database across devices
+                if (topic === "instant_gh_pages_chat/global_sync/users") {
+                    let localUsers = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+                    if (data.type === "SYNC_ALL_USERS") {
+                        // Merge missing profiles
+                        Object.assign(localUsers, data.payload);
+                        localStorage.setItem('chat_v3_users', JSON.stringify(localUsers));
+                    } else if (data.type === "NEW_REGISTRATION") {
+                        localUsers[data.username] = data.payload;
+                        localStorage.setItem('chat_v3_users', JSON.stringify(localUsers));
+                    } else if (data.type === "BAN_USER") {
+                        delete localUsers[data.username];
+                        localStorage.setItem('chat_v3_users', JSON.stringify(localUsers));
+                        if(currentUser === data.username) {
+                            alert("Your account has been terminated globally by an administrator.");
+                            logout();
+                        }
+                    }
+                    if(isAdmin) renderAdminDashboard();
+                    return;
+                }
+
+                // 2. Sync Global Reports Feed
+                if (topic === "instant_gh_pages_chat/global_sync/reports") {
+                    let localReports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
+                    if (data.type === "NEW_REPORT") {
+                        localReports.push(data.payload);
+                    } else if (data.type === "DISMISS_REPORT") {
+                        localReports.splice(data.index, 1);
+                    }
+                    localStorage.setItem('chat_v3_reports', JSON.stringify(localReports));
+                    if(isAdmin) renderAdminDashboard();
+                    return;
+                }
+
+                // 3. Answer data requests from new nodes joining the global network
+                if (topic === "instant_gh_pages_chat/global_sync/requests" && data.type === "REQ_DATABASE") {
+                    let usersDb = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
+                    if (Object.keys(usersDb).length > 0) {
+                        globalClient.publish("instant_gh_pages_chat/global_sync/users", JSON.stringify({
+                            type: "SYNC_ALL_USERS",
+                            payload: usersDb
+                        }));
+                    }
+                    return;
+                }
+
+                // Standard peer alerting & chat logic
+                if (data.sender === currentUser) return;
+
+                if (topic.includes("alerts/")) {
+                    if (data.type === "room_invite") {
+                        pushNotification(`📩 <b>${data.senderName}</b> invited you to: <button onclick="acceptRoomInvite('${data.roomId}','${data.roomName}')">Join Room</button>`, data.roomId);
+                    } else {
+                        pushNotification(`📢 User <b>${data.senderName}</b> (${data.senderCode}) linked your code!`, data.roomContextId);
+                        addRoomToUserContext(data.roomContextId);
+                    }
+                    return;
+                }
+
+                if (!inActiveChat || currentRoomId !== data.roomId) {
+                    pushNotification(`✉️ <b>${data.sender}</b>: "${data.text.substring(0,20)}" in ${data.roomName}`, data.roomId);
+                } 
+                
+                if (currentRoomId === data.roomId && inActiveChat) {
+                    logMessage(data.sender, data.text, "other");
+                }
+                if(!isAdmin) saveMessageToHistory(data.roomId, data.sender, data.text, "other");
+
+            } catch (e) {}
+        });
+    }
+
     function switchAuthTab(mode) {
         authMode = mode;
         document.getElementById('auth-title').textContent = mode === 'login' ? 'Login' : 'Create Account';
@@ -193,7 +284,8 @@
             myUserCode = "ADMIN-ONLY";
             document.getElementById('auth-area').classList.add('hidden');
             document.getElementById('admin-area').classList.remove('hidden');
-            initGlobalBackgroundSync();
+            
+            globalClient.subscribe("instant_gh_pages_chat/p2p_secure/+/+");
             renderAdminDashboard();
             return;
         }
@@ -204,8 +296,17 @@
             if (users[username] || username === "konstas0002") return alert("Username already taken!");
             const generatedCode = "CC-" + Math.floor(100000 + Math.random() * 900000);
             
-            users[username] = { password: password, code: generatedCode, myChats: [] };
+            const profileData = { password: password, code: generatedCode, myChats: [] };
+            users[username] = profileData;
             localStorage.setItem('chat_v3_users', JSON.stringify(users));
+
+            // Publish registration globally so other connected machines log it
+            globalClient.publish("instant_gh_pages_chat/global_sync/users", JSON.stringify({
+                type: "NEW_REGISTRATION",
+                username: username,
+                payload: profileData
+            }));
+
             alert(`Account created! Your code is: ${generatedCode}`);
         } else {
             if (!users[username] || users[username].password !== password) {
@@ -223,8 +324,17 @@
         document.getElementById('auth-area').classList.add('hidden');
         document.getElementById('setup-area').classList.remove('hidden');
         
-        initGlobalBackgroundSync();
+        globalClient.subscribe("instant_gh_pages_chat/alerts/" + myUserCode);
+        const rooms = users[currentUser].myChats || [];
+        rooms.forEach(roomId => {
+            globalClient.subscribe("instant_gh_pages_chat/p2p_secure/" + roomId);
+        });
+
         renderActiveRoomsList();
+    }
+
+    function logout() {
+        location.reload(); // Hard reload clears application runtime states safely
     }
 
     function toggleInboxTray() {
@@ -272,51 +382,6 @@
         updateInboxDOM();
     }
 
-    function initGlobalBackgroundSync() {
-        globalClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
-
-        globalClient.on('connect', () => {
-            globalClient.subscribe("instant_gh_pages_chat/alerts/" + myUserCode);
-            if(!isAdmin) {
-                let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
-                const rooms = users[currentUser].myChats || [];
-                rooms.forEach(roomId => {
-                    globalClient.subscribe("instant_gh_pages_chat/p2p_secure/" + roomId);
-                });
-            } else {
-                // Admin checks standard global rooms
-                globalClient.subscribe("instant_gh_pages_chat/p2p_secure/+/+");
-            }
-        });
-
-        globalClient.on('message', (topic, message) => {
-            try {
-                const data = JSON.parse(message.toString());
-                if (data.sender === currentUser) return;
-
-                if (topic.includes("alerts/")) {
-                    if (data.type === "room_invite") {
-                        pushNotification(`📩 <b>${data.senderName}</b> invited you to: <button onclick="acceptRoomInvite('${data.roomId}','${data.roomName}')">Join Room</button>`, data.roomId);
-                    } else {
-                        pushNotification(`📢 User <b>${data.senderName}</b> (${data.senderCode}) linked your code!`, data.roomContextId);
-                        addRoomToUserContext(data.roomContextId);
-                    }
-                    return;
-                }
-
-                if (!inActiveChat || currentRoomId !== data.roomId) {
-                    pushNotification(`✉️ <b>${data.sender}</b>: "${data.text.substring(0,20)}" in ${data.roomName}`, data.roomId);
-                } 
-                
-                if (currentRoomId === data.roomId && inActiveChat) {
-                    logMessage(data.sender, data.text, "other");
-                }
-                if(!isAdmin) saveMessageToHistory(data.roomId, data.sender, data.text, "other");
-
-            } catch (e) {}
-        });
-    }
-
     function triggerDeleteHistory() {
         if (!confirm("Wipe all message logs for this chat?")) return;
         localStorage.removeItem(`h3_${currentUser}_${currentRoomId}`);
@@ -329,16 +394,21 @@
         const reason = prompt("Enter reason for report:");
         if (!reason) return;
 
-        let reports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
-        reports.push({
+        const reportData = {
             reporter: currentUser,
             reportedUser: target,
             reason: reason,
             room: currentRoomId,
             timestamp: new Date().toLocaleString()
-        });
-        localStorage.setItem('chat_v3_reports', JSON.stringify(reports));
-        alert("Report filed successfully.");
+        };
+
+        // Sync report item globally via MQTT
+        globalClient.publish("instant_gh_pages_chat/global_sync/reports", JSON.stringify({
+            type: "NEW_REPORT",
+            payload: reportData
+        }));
+
+        alert("Report filed successfully across the network.");
     }
 
     function userLeaveChat(roomId) {
@@ -429,7 +499,7 @@
         container.innerHTML = "";
 
         let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
-        const activeRooms = users[currentUser].myChats || [];
+        const activeRooms = users[currentUser]?.myChats || [];
 
         if(activeRooms.length === 0) {
             container.innerHTML = `<p style="color:#888; font-style:italic;">No active rooms found.</p>`;
@@ -514,6 +584,7 @@
         }
     }
 
+    // Standard Message Output Dispatch Engine
     function sendMsg() {
         const input = document.getElementById('msg-input');
         const text = input.value.trim();
@@ -579,12 +650,10 @@
         box.scrollTop = box.scrollHeight;
     }
 
-    // --- UPDATED ROOMS ONLY ENGINE FOR ADMIN ---
     function adminJoinRoom() {
         let inputTarget = document.getElementById('admin-room-input').value.trim();
         if(!inputTarget) return alert("Specify room name!");
         
-        // Strict room path filter parsing logic
         if(!inputTarget.startsWith("code_") && !inputTarget.startsWith("named_")) {
             inputTarget = "named_" + inputTarget.toLowerCase();
         }
@@ -656,48 +725,37 @@
     }
 
     function dismissReport(index) {
-        let reports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
-        reports.splice(index, 1);
-        localStorage.setItem('chat_v3_reports', JSON.stringify(reports));
-        renderAdminDashboard();
+        globalClient.publish("instant_gh_pages_chat/global_sync/reports", JSON.stringify({
+            type: "DISMISS_REPORT",
+            index: index
+        }));
     }
 
     function adminDeleteUser(targetUser) {
-        if (!confirm(`Delete user "${targetUser}"?`)) return;
-        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
-        delete users[targetUser];
-        localStorage.setItem('chat_v3_users', JSON.stringify(users));
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-            if (localStorage.key(i).startsWith(`h3_${targetUser}_`)) localStorage.removeItem(localStorage.key(i));
-        }
-        renderAdminDashboard();
+        if (!confirm(`Delete user "${targetUser}"? This kicks them offline globally.`)) return;
+
+        // Broadcast ban action globally via MQTT
+        globalClient.publish("instant_gh_pages_chat/global_sync/users", JSON.stringify({
+            type: "BAN_USER",
+            username: targetUser
+        }));
     }
 
     function adminDeleteRoom(roomId) {
-        if (!confirm(`Wipe room "${roomId}"?`)) return;
+        if (!confirm(`Wipe room "${roomId}" locally?`)) return;
         let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
         Object.keys(users).forEach(username => {
             if (users[username].myChats) users[username].myChats = users[username].myChats.filter(id => id !== roomId);
         });
         localStorage.setItem('chat_v3_users', JSON.stringify(users));
         for (let i = localStorage.length - 1; i >= 0; i--) {
-            if (localStorage.key(i).endsWith(`_${roomId}`)) localStorage.removeItem(localStorage.key(i));
+            if (localStorage.key(i).startsWith(`h3_${currentUser}_${roomId}`)) localStorage.removeItem(localStorage.key(i));
         }
         renderAdminDashboard();
     }
 
-    function logout() {
-        if(globalClient) globalClient.end();
-        currentUser = null;
-        isAdmin = false;
-        activeNotifications = [];
-        updateInboxDOM();
-        document.getElementById('inbox-tray').style.display = "none";
-        document.getElementById('setup-area').classList.add('hidden');
-        document.getElementById('admin-area').classList.add('hidden');
-        document.getElementById('chat-area').classList.add('hidden');
-        document.getElementById('auth-area').classList.remove('hidden');
-    }
+    // Launch connection pipeline right on tab generation
+    initMQTTConnection();
 </script>
 </body>
 </html>
