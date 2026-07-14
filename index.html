@@ -173,29 +173,35 @@
     let isAdmin = false;
     let activeNotifications = [];
 
-    // Auto-connect MQTT early to handle background database synchronization
+    // Cleaned root path prefix to protect your app namespace on public brokers
+    const TOPIC_PREFIX = "inst_global_chat_v3_secure";
+
     function initMQTTConnection() {
-        globalClient = mqtt.connect('wss://test.mosquitto.org:8081/mqtt');
+        // FIXED: Using HiveMQ stable secure websocket port 8000 for web compatibility
+        globalClient = mqtt.connect('wss://broker.hivemq.com:8000/mqtt');
 
         globalClient.on('connect', () => {
-            // Global topics for system synchronization across different devices
-            globalClient.subscribe("instant_gh_pages_chat/global_sync/users");
-            globalClient.subscribe("instant_gh_pages_chat/global_sync/reports");
-            globalClient.subscribe("instant_gh_pages_chat/global_sync/requests");
+            if(document.getElementById('chat-box')) {
+                document.getElementById('chat-box').innerHTML = '<div class="msg system">Connected to secure global cluster. Ready.</div>';
+            }
+            
+            // Subscribe to synchronization channels
+            globalClient.subscribe(`${TOPIC_PREFIX}/global_sync/users`);
+            globalClient.subscribe(`${TOPIC_PREFIX}/global_sync/reports`);
+            globalClient.subscribe(`${TOPIC_PREFIX}/global_sync/requests`);
 
-            // Broadcast request to get user tables from other online devices upon loading up
-            globalClient.publish("instant_gh_pages_chat/global_sync/requests", JSON.stringify({ type: "REQ_DATABASE" }));
+            // Broadcast syncing request
+            globalClient.publish(`${TOPIC_PREFIX}/global_sync/requests`, JSON.stringify({ type: "REQ_DATABASE" }));
         });
 
         globalClient.on('message', (topic, message) => {
             try {
                 const data = JSON.parse(message.toString());
 
-                // 1. Sync registered users database across devices
-                if (topic === "instant_gh_pages_chat/global_sync/users") {
+                // 1. Sync registered users database
+                if (topic === `${TOPIC_PREFIX}/global_sync/users`) {
                     let localUsers = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
                     if (data.type === "SYNC_ALL_USERS") {
-                        // Merge missing profiles
                         Object.assign(localUsers, data.payload);
                         localStorage.setItem('chat_v3_users', JSON.stringify(localUsers));
                     } else if (data.type === "NEW_REGISTRATION") {
@@ -214,7 +220,7 @@
                 }
 
                 // 2. Sync Global Reports Feed
-                if (topic === "instant_gh_pages_chat/global_sync/reports") {
+                if (topic === `${TOPIC_PREFIX}/global_sync/reports`) {
                     let localReports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
                     if (data.type === "NEW_REPORT") {
                         localReports.push(data.payload);
@@ -226,11 +232,11 @@
                     return;
                 }
 
-                // 3. Answer data requests from new nodes joining the global network
-                if (topic === "instant_gh_pages_chat/global_sync/requests" && data.type === "REQ_DATABASE") {
+                // 3. Answer data sync requests
+                if (topic === `${TOPIC_PREFIX}/global_sync/requests` && data.type === "REQ_DATABASE") {
                     let usersDb = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
                     if (Object.keys(usersDb).length > 0) {
-                        globalClient.publish("instant_gh_pages_chat/global_sync/users", JSON.stringify({
+                        globalClient.publish(`${TOPIC_PREFIX}/global_sync/users`, JSON.stringify({
                             type: "SYNC_ALL_USERS",
                             payload: usersDb
                         }));
@@ -238,14 +244,13 @@
                     return;
                 }
 
-                // Standard peer alerting & chat logic
                 if (data.sender === currentUser) return;
 
                 if (topic.includes("alerts/")) {
                     if (data.type === "room_invite") {
                         pushNotification(`📩 <b>${data.senderName}</b> invited you to: <button onclick="acceptRoomInvite('${data.roomId}','${data.roomName}')">Join Room</button>`, data.roomId);
                     } else {
-                        pushNotification(`📢 User <b>${data.senderName}</b> (${data.senderCode}) linked your code!`, data.roomContextId);
+                        pushNotification(`📢 User <b>${data.senderName}</b> linked your code!`, data.roomContextId);
                         addRoomToUserContext(data.roomContextId);
                     }
                     return;
@@ -285,7 +290,7 @@
             document.getElementById('auth-area').classList.add('hidden');
             document.getElementById('admin-area').classList.remove('hidden');
             
-            globalClient.subscribe("instant_gh_pages_chat/p2p_secure/+/+");
+            globalClient.subscribe(`${TOPIC_PREFIX}/p2p_secure/+/+`);
             renderAdminDashboard();
             return;
         }
@@ -300,8 +305,7 @@
             users[username] = profileData;
             localStorage.setItem('chat_v3_users', JSON.stringify(users));
 
-            // Publish registration globally so other connected machines log it
-            globalClient.publish("instant_gh_pages_chat/global_sync/users", JSON.stringify({
+            globalClient.publish(`${TOPIC_PREFIX}/global_sync/users`, JSON.stringify({
                 type: "NEW_REGISTRATION",
                 username: username,
                 payload: profileData
@@ -324,17 +328,17 @@
         document.getElementById('auth-area').classList.add('hidden');
         document.getElementById('setup-area').classList.remove('hidden');
         
-        globalClient.subscribe("instant_gh_pages_chat/alerts/" + myUserCode);
+        globalClient.subscribe(`${TOPIC_PREFIX}/alerts/${myUserCode}`);
         const rooms = users[currentUser].myChats || [];
         rooms.forEach(roomId => {
-            globalClient.subscribe("instant_gh_pages_chat/p2p_secure/" + roomId);
+            globalClient.subscribe(`${TOPIC_PREFIX}/p2p_secure/${roomId}`);
         });
 
         renderActiveRoomsList();
     }
 
     function logout() {
-        location.reload(); // Hard reload clears application runtime states safely
+        location.reload();
     }
 
     function toggleInboxTray() {
@@ -402,8 +406,7 @@
             timestamp: new Date().toLocaleString()
         };
 
-        // Sync report item globally via MQTT
-        globalClient.publish("instant_gh_pages_chat/global_sync/reports", JSON.stringify({
+        globalClient.publish(`${TOPIC_PREFIX}/global_sync/reports`, JSON.stringify({
             type: "NEW_REPORT",
             payload: reportData
         }));
@@ -444,7 +447,7 @@
             roomName: cleanLabel
         };
 
-        globalClient.publish("instant_gh_pages_chat/alerts/" + targetCode, JSON.stringify(invitePayload));
+        globalClient.publish(`${TOPIC_PREFIX}/alerts/${targetCode}`, JSON.stringify(invitePayload));
         alert("Invitation sent!");
         document.getElementById('invite-code-raw').value = "";
     }
@@ -466,7 +469,7 @@
         addRoomToUserContext(combinedSecretRoomId);
 
         const systemPayload = { senderCode: myUserCode, senderName: currentUser, roomContextId: combinedSecretRoomId };
-        globalClient.publish("instant_gh_pages_chat/alerts/" + targetCode, JSON.stringify(systemPayload));
+        globalClient.publish(`${TOPIC_PREFIX}/alerts/${targetCode}`, JSON.stringify(systemPayload));
 
         document.getElementById('friend-code-input').value = "";
         openChatRoom(combinedSecretRoomId, `Private Code Link`);
@@ -489,7 +492,7 @@
         if (!users[currentUser].myChats.includes(roomId)) {
             users[currentUser].myChats.push(roomId);
             localStorage.setItem('chat_v3_users', JSON.stringify(users));
-            if(globalClient) globalClient.subscribe("instant_gh_pages_chat/p2p_secure/" + roomId);
+            if(globalClient) globalClient.subscribe(`${TOPIC_PREFIX}/p2p_secure/${roomId}`);
             renderActiveRoomsList();
         }
     }
@@ -534,7 +537,7 @@
 
     function openChatRoom(roomId, displayLabel) {
         currentRoomId = roomId;
-        currentTopic = "instant_gh_pages_chat/p2p_secure/" + currentRoomId;
+        currentTopic = `${TOPIC_PREFIX}/p2p_secure/${currentRoomId}`;
         inActiveChat = true;
 
         removeNotificationByRoom(roomId);
@@ -584,7 +587,6 @@
         }
     }
 
-    // Standard Message Output Dispatch Engine
     function sendMsg() {
         const input = document.getElementById('msg-input');
         const text = input.value.trim();
@@ -683,78 +685,58 @@
         
         let reports = JSON.parse(localStorage.getItem('chat_v3_reports')) || [];
         if(reports.length === 0) {
-            reportsListContainer.innerHTML = "<p style='color:green; font-style:italic;'>No reports submitted.</p>";
+            reportsListContainer.innerHTML = "<p style='color:green; font-style:italic; font-size:0.9rem;'>No active user flags submitted.</p>";
         } else {
-            reports.forEach((rep, index) => {
-                const rCard = document.createElement('div');
-                rCard.className = "report-card";
-                rCard.innerHTML = `⚠️ <b>[${rep.timestamp}]</b> User <b>${rep.reporter}</b> reported <b>${rep.reportedUser}</b><br>
-                                   Context Room: <i>${rep.room}</i><br>
-                                   <b>Reason:</b> "${rep.reason}"<br>
-                                   <button class="secondary-btn" onclick="dismissReport(${index})">Dismiss Report</button>`;
-                reportsListContainer.appendChild(rCard);
+            reports.forEach((rep, idx) => {
+                const d = document.createElement('div');
+                d.className = "report-card";
+                d.innerHTML = `
+                    <strong>⚠️ Flagged: ${rep.reportedUser}</strong> (By: ${rep.reporter})<br>
+                    <small>Context Room ID: ${rep.room} | Filed: ${rep.timestamp}</small><br>
+                    <p style="margin:5px 0; color:#555;">Reason: "${rep.reason}"</p>
+                    <div style="display:flex; gap:5px; margin-top:5px;">
+                        <button class="delete-btn" style="padding:2px 6px; font-size:0.75rem;" onclick="adminAction('ban','${rep.reportedUser}', ${idx})">Ban Account</button>
+                        <button class="secondary-btn" style="padding:2px 6px; font-size:0.75rem;" onclick="adminAction('dismiss','', ${idx})">Dismiss</button>
+                    </div>
+                `;
+                reportsListContainer.appendChild(d);
             });
         }
 
         let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
-        Object.keys(users).forEach(user => {
-            const item = document.createElement('div');
-            item.className = "room-item";
-            item.innerHTML = `<span>👤 User: <strong>${user}</strong> (Code: <code>${users[user].code}</code>)</span>
-                              <button class="delete-btn" onclick="adminDeleteUser('${user}')">Ban / Delete</button>`;
-            usersListContainer.appendChild(item);
-        });
-
-        let foundRooms = new Set();
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key.startsWith("h3_")) {
-                const parts = key.split("_");
-                if (parts.length >= 3) foundRooms.add(parts.slice(2).join("_"));
-            }
+        const uKeys = Object.keys(users);
+        if(uKeys.length === 0) {
+            usersListContainer.innerHTML = "<p style='color:#888; font-style:italic;'>No local user synchronization rows available.</p>";
+        } else {
+            uKeys.forEach(uKey => {
+                const div = document.createElement('div');
+                div.className = "room-item";
+                div.innerHTML = `
+                    <div>👤 <b>${uKey}</b> (Code: ${users[uKey].code})</div>
+                    <button class="delete-btn" style="padding:4px 8px; font-size:0.75rem;" onclick="adminAction('ban','${uKey}')">Terminate</button>
+                `;
+                usersListContainer.appendChild(div);
+            });
         }
-        foundRooms.forEach(roomId => {
-            const item = document.createElement('div');
-            item.className = "room-item";
-            const label = roomId.startsWith("code_") ? `🔒 Private Link: ${roomId}` : `💬 Public Room: ${roomId.replace("named_", "")}`;
-            item.innerHTML = `<div class="room-clickable"><span>${label}</span> <strong>Chat Here →</strong></div>
-                              <button class="delete-btn" onclick="adminDeleteRoom('${roomId}')">Wipe Room</button>`;
-            item.querySelector('.room-clickable').onclick = () => openChatRoom(roomId, `Admin Room View`);
-            roomsListContainer.appendChild(item);
-        });
     }
 
-    function dismissReport(index) {
-        globalClient.publish("instant_gh_pages_chat/global_sync/reports", JSON.stringify({
-            type: "DISMISS_REPORT",
-            index: index
-        }));
-    }
-
-    function adminDeleteUser(targetUser) {
-        if (!confirm(`Delete user "${targetUser}"? This kicks them offline globally.`)) return;
-
-        // Broadcast ban action globally via MQTT
-        globalClient.publish("instant_gh_pages_chat/global_sync/users", JSON.stringify({
-            type: "BAN_USER",
-            username: targetUser
-        }));
-    }
-
-    function adminDeleteRoom(roomId) {
-        if (!confirm(`Wipe room "${roomId}" locally?`)) return;
-        let users = JSON.parse(localStorage.getItem('chat_v3_users')) || {};
-        Object.keys(users).forEach(username => {
-            if (users[username].myChats) users[username].myChats = users[username].myChats.filter(id => id !== roomId);
-        });
-        localStorage.setItem('chat_v3_users', JSON.stringify(users));
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-            if (localStorage.key(i).startsWith(`h3_${currentUser}_${roomId}`)) localStorage.removeItem(localStorage.key(i));
+    function adminAction(actionType, targetUser, index) {
+        if(actionType === 'ban') {
+            if(!confirm(`Terminate account profile "${targetUser}" across the ecosystem network?`)) return;
+            globalClient.publish(`${TOPIC_PREFIX}/global_sync/users`, JSON.stringify({
+                type: "BAN_USER",
+                username: targetUser
+            }));
+            if(index !== undefined) adminAction('dismiss', '', index);
+        } else if(actionType === 'dismiss') {
+            globalClient.publish(`${TOPIC_PREFIX}/global_sync/reports`, JSON.stringify({
+                type: "DISMISS_REPORT",
+                index: index
+            }));
         }
-        renderAdminDashboard();
     }
 
-    // Launch connection pipeline right on tab generation
+    // Trigger immediate setup pipeline on script runtime launch
     initMQTTConnection();
 </script>
 </body>
